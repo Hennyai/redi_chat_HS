@@ -221,48 +221,53 @@ ioForUserChat.on('connection', (socket) => {
     socket.on('actionFriendRequest', async data => {
       let target = await USER.findOne({phone: data.phone});
       let accept = data.accept;
-      try {
-        user = await USER.findOneAndUpdate(
-          { phone: user.phone },
-          { $pull: { requestContact: target._id } },
-          { new: true }
-        );
-
-        if(accept){
+      let check = await USER.findOne({phone: user.phone, requestContact: { $in: [target] },});
+      if(check){
+        try {
           user = await USER.findOneAndUpdate(
             { phone: user.phone },
-            { $push: { contacts: target} },
+            { $pull: { requestContact: target._id } },
             { new: true }
           );
-          //Tạo phòng mới
-          try {
-        
-            const room = await CHATROOM.findOne({
-              owner: { $all: [user, target] }
-            }).populate('owner');
-        
-            if (room) {
-              socket.emit('message', 'Phòng đã tồn tại');
-            } else {
-              const chatRoom = new CHATROOM({
-                message: [],
-                owner: [user, target],
-                createAt: redi.getTime(),
-                lastMessageDate: redi.getTime(),
-              });
-              await chatRoom.save();
-              socket.emit('message', 'Tạo thành công phòng mới trong database');
-            }
-          } catch (error) {
-            console.error(error);
-          };
-          socket.emit('message', "Đã chấp nhận lời mời kết bạn của "+target.fullName);
-        } else {
-          socket.emit('message', "Đã từ chối lời mời kết bạn của "+target.fullName);
+
+          if(accept){
+            user = await USER.findOneAndUpdate(
+              { phone: user.phone },
+              { $push: { contacts: target} },
+              { new: true }
+            );
+            //Tạo phòng mới
+            try {
+          
+              const room = await CHATROOM.findOne({
+                owner: { $all: [user, target] }
+              }).populate('owner');
+          
+              if (room) {
+                socket.emit('message', 'Phòng đã tồn tại');
+              } else {
+                const chatRoom = new CHATROOM({
+                  message: [],
+                  owner: [user, target],
+                  createAt: redi.getTime(),
+                  lastMessageDate: redi.getTime(),
+                });
+                await chatRoom.save();
+                socket.emit('message', 'Tạo thành công phòng mới trong database');
+              }
+            } catch (error) {
+              console.error(error);
+            };
+            socket.emit('message', "Đã chấp nhận lời mời kết bạn của "+target.fullName);
+          } else {
+            socket.emit('message', "Đã từ chối lời mời kết bạn của "+target.fullName);
+          }
+          
+        } catch (error) {
+          console.error(error);
         }
-        
-      } catch (error) {
-        console.error(error);
+      } else {
+        socket.emit('message', 'Người dùng không có trong danh sách kết bạn');
       }
     });
 
@@ -316,7 +321,8 @@ ioForUserChat.on('connection', (socket) => {
 
       await CHATROOM.findOneAndUpdate(
         {_id: currentRoom._id}, 
-        {$push: { message: newMessage}}, 
+        {$push: { message: newMessage},
+         $set: { lastMessageDate: redi.getTime() }}, 
         { new: true }
       );
     })

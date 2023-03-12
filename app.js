@@ -152,186 +152,192 @@ const ioForUserChat = require("socket.io")(serverForUserChat, {
 ioForUserChat.on('connection', (socket) => {
   let userPhone;
   let user;
-  let currentRoom;
-  let currentRoomID;
+  let chatRooms;
 
+  //Nên có 1 event listener trên socket 'message' dùng để thông báo
   //Gửi thông tin người dùng đã nhận được từ backend:
+  //  - Gửi thông tin đã online đến những người đã kết bạn (chung room)
+    //data là sdt của người dùng
   socket.on('sendUser', async data => {
     userPhone = data;
     user = await USER.findOne({phone: userPhone});
     console.log("User "+user.fullName+" đã kết nối");
+    chatRooms = await CHATROOM.find({ owner: user});
+    chatRooms.forEach(chatRoom => {
+      socket.join(chatRoom._id.toString());
+      let countUser = ioForUserChat.sockets.adapter.rooms.get(chatRoom._id.toString()).size;
+      if(countUser>1){
+        socket.to(chatRoom._id.toString()).emit('onlineStatus',{
+          //Nếu có làm group thì thêm userID
+          roomID: chatRoom._id.toString(),
+          online: true
+        });
+      }
+    });
   });
 
   // Các xử lý sự kiện khi người dùng đăng nhập thành công gồm: 
-
-  //Nên có 1 event listener trên socket 'message' dùng để thông báo
-    //  - Gửi thông tin đã online đến những người đã kết bạn (chung room)
-    socket.on('roomAccess', async phone=>{
-      try{
-        let target = await USER.findOne({phone: phone});
-        if(await USER.findOne({ phone: user.phone, contacts: target._id })){
-          currentRoom = await CHATROOM.findOne({owner: { $all: [user._id, target._id] }});
-          currentRoomID=currentRoom._id.toString();
-          
-          socket.emit('message', 'Đã vào phòng');
-
-          socket.join(currentRoomID);
-
-          //Gửi thông tin online đến onlineStatus, tạo event listener để kiểm tra
-          socket.to(currentRoomID).emit('onlineStatus', user.fullName+' online');
-        } else {
-          socket.emit('message', 'Chưa kết bạn với người này');
-        };
-      } catch (error) {
-        console.error(error);
+  //Tìm tài khoản để gửi kết bạn:
+  socket.on('findUser', async targetPhone =>{
+    let target = await USER.findOne({phone: targetPhone});
+    try{
+      if(target){
+        socket.emit('foundUser', target._id);
+      } else {
+        socket.emit('message', 'Không tìm thấy tài khoản với số điện thoại này');
       };
-    });
-
-    //Chuyển qua khung chat khác
-    socket.on('leaveRoom', ()=>{
-      socket.leave(currentRoomID);
-      socket.to(currentRoomID).emit('onlineStatus', user.fullName+' offline');
-    })
-    
+    } catch(error){
+      console.error(error);
+    }
+  });
     //  - Gửi yêu cầu kết bạn/ Nhập yêu cầu kết bạn (có lưu vào CSDL)
         //Gửi số điện thoại người muốn kết bạn(đã có kiểm tra tồn tại)
-    socket.on('sendFriendRequest', async targetPhone => {
-      if(await USER.findOne({ phone: targetPhone, requestContact: user })){
-        socket.emit('message', 'Đã gửi kết bạn rồi');
-      } else {
-        try {
-          await USER.findOneAndUpdate(
-            { phone: targetPhone },
-            { $push: { requestContact: user} },
-            { new: true }
-          );
-          socket.emit('message', 'Đã gửi kết bạn');
-        } catch (error) {
-          console.error(error);
-        }
+  socket.on('sendFriendRequest', async targetPhone => {
+    if(await USER.findOne({ phone: targetPhone, requestContact: user })){
+      socket.emit('message', 'Đã gửi kết bạn rồi');
+    } else {
+      try {
+        await USER.findOneAndUpdate(
+          { phone: targetPhone },
+          { $push: { requestContact: user} },
+          { new: true }
+        );
+        socket.emit('message', 'Đã gửi kết bạn');
+      } catch (error) {
+        console.error(error);
       }
-    });
+    }
+  });
 
-      //Chấp nhận/từ chối lời mời kết bạn
-        //Template socket.io(nếu accept là false nghĩa là từ chối kết bạn):
-        // {
-        //   "phone":"01235",
-        //   "accept":true
-        // }
-    socket.on('actionFriendRequest', async data => {
-      let target = await USER.findOne({phone: data.phone});
-      let accept = data.accept;
-      let check = await USER.findOne({phone: user.phone, requestContact: { $in: [target] },});
-      if(check){
-        try {
+  //Chấp nhận/từ chối lời mời kết bạn
+    //Template socket.io(nếu accept là false nghĩa là từ chối kết bạn):
+    // {
+    //   "phone":"01235",
+    //   "accept":true
+    // }
+  socket.on('actionFriendRequest', async data => {
+    let target = await USER.findOne({phone: data.phone});
+    let accept = data.accept;
+    let check = await USER.findOne({phone: user.phone, requestContact: { $in: [target] },});
+    if(check){
+      try {
+        user = await USER.findOneAndUpdate(
+          { phone: user.phone },
+          { $pull: { requestContact: target._id } },
+          { new: true }
+        );
+
+        if(accept){
           user = await USER.findOneAndUpdate(
             { phone: user.phone },
-            { $pull: { requestContact: target._id } },
+            { $push: { contacts: target} },
             { new: true }
           );
-
-          if(accept){
-            user = await USER.findOneAndUpdate(
-              { phone: user.phone },
-              { $push: { contacts: target} },
-              { new: true }
-            );
-            //Tạo phòng mới
-            try {
-          
-              const room = await CHATROOM.findOne({
-                owner: { $all: [user, target] }
-              }).populate('owner');
-          
-              if (room) {
-                socket.emit('message', 'Phòng đã tồn tại');
-              } else {
-                const chatRoom = new CHATROOM({
-                  message: [],
-                  owner: [user, target],
-                  createAt: redi.getTime(),
-                  lastMessageDate: redi.getTime(),
-                });
-                await chatRoom.save();
-                socket.emit('message', 'Tạo thành công phòng mới trong database');
-              }
-            } catch (error) {
-              console.error(error);
-            };
-            socket.emit('message', "Đã chấp nhận lời mời kết bạn của "+target.fullName);
-          } else {
-            socket.emit('message', "Đã từ chối lời mời kết bạn của "+target.fullName);
-          }
-          
-        } catch (error) {
-          console.error(error);
+          //Tạo phòng mới
+          try {
+        
+            const room = await CHATROOM.findOne({
+              owner: { $all: [user, target] }
+            }).populate('owner');
+        
+            if (room) {
+              socket.emit('message', 'Phòng đã tồn tại');
+            } else {
+              const chatRoom = new CHATROOM({
+                message: [],
+                owner: [user, target],
+                createAt: redi.getTime(),
+                lastMessageDate: redi.getTime(),
+              });
+              await chatRoom.save();
+              socket.emit('message', 'Tạo thành công phòng mới trong database');
+            }
+          } catch (error) {
+            console.error(error);
+          };
+          socket.emit('message', "Đã chấp nhận lời mời kết bạn của "+target.fullName);
+        } else {
+          socket.emit('message', "Đã từ chối lời mời kết bạn của "+target.fullName);
         }
-      } else {
-        socket.emit('message', 'Người dùng không có trong danh sách kết bạn');
+        
+      } catch (error) {
+        console.error(error);
       }
+    } else {
+      socket.emit('message', 'Người dùng không có trong danh sách kết bạn');
+    }
+  });
+
+  //Xóa bạn
+    //Gửi số điện thoại của người muốn xóa(đã có kiểm tra tồn tại)
+  socket.on('deleteFriend', async targetPhone => {
+    let target = await USER.findOne({phone: targetPhone});
+    if(await USER.findOne({ phone: user.phone, contacts: target })){
+      try {
+        user = await USER.findOneAndUpdate(
+          { phone: user.phone },
+          { $pull: { contacts: target._id } },
+          { new: true }
+        );
+        socket.emit('message', 'Đã xóa kết bạn với '+target.fullName);
+      } catch (error) {
+        console.error(error);
+      }
+    } else {
+      socket.emit('message', 'Không có người này trong danh bạ');
+    }
+  });
+
+  //  - Gửi/nhận tin nhắn với bạn bè (có lưu vào CSDL)
+    //Message có dạng:
+    // {
+    //   "room": "640c3823cc03aac30b541544",
+    //   "content": "Tawawa with type",
+    //   "type": "image"
+    // }
+  socket.on('sendMessageFriend', async function (message, callback) {
+    let currentRoom = await CHATROOM.findById(message.room);
+    socket.to(currentRoom._id.toString()).emit('receiveMessageFriend', {
+      ...message,
+      createAt: redi.getTime()
     });
 
-    //Xóa bạn
-      //Gửi số điện thoại của người muốn xóa(đã có kiểm tra tồn tại)
-    socket.on('deleteFriend', async targetPhone => {
-      let target = await USER.findOne({phone: targetPhone});
-      if(await USER.findOne({ phone: user.phone, contacts: target })){
-        try {
-          user = await USER.findOneAndUpdate(
-            { phone: user.phone },
-            { $pull: { contacts: target._id } },
-            { new: true }
-          );
-          socket.emit('message', 'Đã xóa kết bạn với '+target.fullName);
-        } catch (error) {
-          console.error(error);
-        }
-      } else {
-        socket.emit('message', 'Không có người này trong danh bạ');
-      }
+    if (typeof callback === 'function') {
+      callback({
+        "status": "ok",
+        "createAt": redi.getTime()
+      });
+    }
+
+    const newMessage = new MESSAGE({
+      content: message.content.toString(),
+      owner: user,
+      chat: currentRoom,
+      createAt: redi.getTime(),
+      type: message.type.toString()
     });
+    await newMessage.save();
 
-    //  - Gửi/nhận tin nhắn với bạn bè (có lưu vào CSDL)
-      //Message có dạng:
-      // {
-      //   "content": "Tawawa with type",
-      //   "type": "image"
-      // }
-    socket.on('sendMessageFriend', async function (message, callback) {
-      socket.to(currentRoomID).emit('receiveMessageFriend', {
-        ...message,
-        createAt: redi.getTime()
-      });
-  
-      if (typeof callback === 'function') {
-        callback({
-          "status": "ok",
-          "createAt": redi.getTime()
-        });
-      }
+    await CHATROOM.findOneAndUpdate(
+      {_id: currentRoom._id}, 
+      {$push: { message: newMessage},
+        $set: { lastMessageDate: redi.getTime() }}, 
+      { new: true }
+    );
+  })
 
-      const newMessage = new MESSAGE({
-        content: message.content.toString(),
-        owner: user,
-        chat: currentRoom,
-        createAt: redi.getTime(),
-        type: message.type.toString()
-      });
-      await newMessage.save();
-
-      await CHATROOM.findOneAndUpdate(
-        {_id: currentRoom._id}, 
-        {$push: { message: newMessage},
-         $set: { lastMessageDate: redi.getTime() }}, 
-        { new: true }
-      );
-    })
-
-    //  - Khi disconnect thì cập nhật lastAccess của user tương ứng trong CSDL
+  //  - Khi disconnect thì cập nhật lastAccess của user tương ứng trong CSDL
   socket.on('disconnect', async () => {
+    console.log("User "+user.fullName+" đã ngắt kết nối");
     try{
-      socket.leave(currentRoomID);
-      socket.to(currentRoomID).emit('onlineStatus', user.fullName+' offline');
+      chatRooms.forEach(chatRoom => {
+        socket.to(chatRoom._id.toString()).emit('onlineStatus',{
+          //Nếu có làm group thì thêm userID
+          roomID: chatRoom._id.toString(),
+          online: false
+        });
+        socket.leave(chatRoom._id.toString());
+      });
     } catch {};
     if(user){
       try {

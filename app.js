@@ -167,7 +167,15 @@ ioForUserChat.on('connection', (socket) => {
       socket.join(chatRoom._id.toString());
       let countUser = ioForUserChat.sockets.adapter.rooms.get(chatRoom._id.toString()).size;
       if(countUser>1){
+        //Gửi đến bạn
         socket.to(chatRoom._id.toString()).emit('onlineStatus',{
+          //Nếu có làm group thì thêm userID
+          roomID: chatRoom._id.toString(),
+          online: true
+        });
+
+        //Gửi đến mình
+        socket.emit('onlineStatus',{
           //Nếu có làm group thì thêm userID
           roomID: chatRoom._id.toString(),
           online: true
@@ -295,6 +303,11 @@ ioForUserChat.on('connection', (socket) => {
     }
   });
 
+  //Gửi thông tin phòng
+  socket.on('loadContentChatRoom', async roomId =>{
+      let messages = await MESSAGE.find({chat: roomId});
+      socket.emit('receiveContentChatRoom', messages)
+  });
   //  - Gửi/nhận tin nhắn với bạn bè (có lưu vào CSDL)
     //Message có dạng:
     // {
@@ -334,9 +347,9 @@ ioForUserChat.on('connection', (socket) => {
   })
 
   //  - Khi disconnect thì cập nhật lastAccess của user tương ứng trong CSDL
-  socket.on('disconnect', async () => {
-    console.log("User "+user.fullName+" đã ngắt kết nối");
+  socket.on('disconnect', async () => {  
     try{
+      console.log("User "+user.fullName+" đã ngắt kết nối");
       chatRooms.forEach(chatRoom => {
         socket.to(chatRoom._id.toString()).emit('onlineStatus',{
           //Nếu có làm group thì thêm userID

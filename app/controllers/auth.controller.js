@@ -1,6 +1,7 @@
 const config = require("../config/index");
-const redi = require("../function/rediFunct")
+const redi = require("../function/rediFunct");
 const USER = require("../models/user.model");
+const CHATROOM = require("../models/chatRoom.model");
 
 var jwt = require("jsonwebtoken");
 var bcrypt = require("bcryptjs");
@@ -33,12 +34,45 @@ exports.signup = async (req, res) => {
 exports.signin = async (req, res) => {
   try {
     const user = await USER.findOne({ phone: req.body.phone });
+    console.log()
     if (user) {
-
       const passwordIsValid = bcrypt.compareSync(req.body.password, user.password);      
       if (passwordIsValid) {
+        //chatRooms làm riêng với friends vì hủy kết bạn vẫn còn phòng
+        let chatRooms = await CHATROOM.find({ owner: user});
+        let roomInfo = [];
+        chatRooms.forEach(async room=>{
+          let friend;
+          room.owner.forEach(async owner=>{
+            if(owner._id.toString()!==user._id.toString()){
+              friend = await USER.findById(owner);
+              roomInfo.push(
+                { _id: room._id, 
+                  owner: room.owner,
+                  lastMessageDate: room.lastMessageDate,
+                  fullNameFriend: friend.fullName,
+                  avatar: friend.avatar
+                }
+              );
+            };
+          });
+        });
+
+        let friends = await USER.find({_id: user.contacts}, { phone: 0, password: 0, requestContact: 0, contacts: 0,createAt: 0,lastAccess: 0,__v: 0});
+        let requestContact = await USER.find({_id: user.requestContact}, { phone: 0, password: 0, requestContact: 0, contacts: 0,createAt: 0,lastAccess: 0,__v: 0});
+
         //Send đăng nhập ở chỗ này
-        res.status(200).send({ message: "Đăng nhập thành công !", user});
+        res.status(200).send({
+          message: {
+            '_id':user._id,
+            'phone':user.phone,
+            'fullName':user.fullName,
+            'avatar':user.avatar,
+            'requestContact': requestContact,
+            'contacts': friends,
+            'chatRoom': roomInfo
+          }
+        });
       } else {
         res.status(400).send({ message: "Mật khẩu nhập sai !" });
       }

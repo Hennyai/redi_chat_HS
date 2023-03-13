@@ -233,6 +233,13 @@ ioForUserChat.on('connection', (socket) => {
             { $push: { contacts: target} },
             { new: true }
           );
+          //Lưu vào csdl của người gửi
+          await USER.findByIdAndUpdate(
+            target._id,
+            { $push: { contacts: user} },
+            { new: true }
+          );
+
           //Tạo phòng mới
           try {
         
